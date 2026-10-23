@@ -1,0 +1,43 @@
+name: Nightly encrypted database backup
+
+# pg_dump → gpg (symmetric AES-256) → R2, keeping 14 days. Restore-test monthly (see README).
+on:
+  schedule:
+    - cron: "30 20 * * *" # 02:00 IST
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+    steps:
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
+      - name: Dump, encrypt, upload
+        run: |
+          set -euo pipefail
+          name="truescore-$(date -u +%Y%m%dT%H%M%SZ).sql.gz.gpg"
+          /usr/lib/postgresql/16/bin/pg_dump --no-owner --no-privileges "$DATABASE_URL" | gzip -9 \
+            | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$BACKUP_PASSPHRASE" -o "$name"
+          aws s3 cp "$name" "s3://$BUCKET/db/$name" --endpoint-url "$R2_ENDPOINT"
+      - name: Delete backups older than 14 days
+        run: |
+          cutoff=$(date -u -d '14 days ago' +%Y%m%d)
+          aws s3 ls "s3://$BUCKET/db/" --endpoint-url "$R2_ENDPOINT" | awk '{print $4}' | while read -r f; do
+            d=$(echo "$f" | sed -E 's/truescore-([0-9]{8}).*/\1/')
+            if [[ "$d" =~ ^[0-9]{8}$ && "$d" < "$cutoff" ]]; then aws s3 rm "s3://$BUCKET/db/$f" --endpoint-url "$R2_ENDPOINT"; fi
+          done

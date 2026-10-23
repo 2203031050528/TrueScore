@@ -1,0 +1,23 @@
+name: Sweep expired exam attempts
+
+# Auto-submits attempts whose deadline (+10 s grace) has passed. Requests touching an expired attempt also
+# auto-submit it, so this is the safety net for students who simply closed the page.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call sweep endpoint
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+        run: |
+          curl --fail-with-body -sS -X POST "$API_URL/api/v1/internal/sweep-attempts" \
+            -H "X-Internal-Secret: $INTERNAL_CRON_SECRET" --retry 3 --retry-delay 10 --max-time 60

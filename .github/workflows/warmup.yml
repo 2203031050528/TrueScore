@@ -1,0 +1,18 @@
+name: Keep backend warm (school hours)
+
+# Render's free instance sleeps after 15 idle minutes. Ping it 07:00–19:00 IST (01:30–13:30 UTC), Mon–Sat.
+# GitHub cron can be delayed; UptimeRobot every 5 minutes is the primary pinger, this is the backup.
+# Before every exam, also run this workflow manually ~30 minutes ahead (workflow_dispatch).
+on:
+  schedule:
+    - cron: "*/10 1-13 * * 1-6"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - run: curl --fail -sS "${{ secrets.API_URL }}/api/v1/internal/warmup" --retry 5 --retry-delay 15 --max-time 60
